@@ -11,35 +11,48 @@ import (
 	"errors"
 	"time"
 	"fmt"
+	"encoding/hex"
 ) 
 
-// Hashes up to 20 bytes into a Bitcoin Address.  Any more than 20 bytes, and
-// Encode returns an error.  Any less than 20 bytes, and Encode pads with 0's 
-// to make 20 bytes. 
-func Encode (hash []byte ) ([]byte, error) {
-    // Format is 1 byte for a network and address class (i.e. P2PKH vs
-	// P2SH), 20 bytes for a RIPEMD160 hash, and 4 bytes of checksum.
-	if(len(hash)>20){
-		return nil, errors.New("Encode can only handle 20 bytes or less")
+// Enodes up to 30 bytes into a Bitcoin public key.  
+// Returns the public key.  The format is as follows:
+// 1      byte   02  (per Bitcoin spec)
+// 1      byte   len (Number of bytes encoded, between 1 and 63)
+// len    bytes  encoded data
+// 30-len bytes  random data
+// fudge  byte   changed to put the value on the eliptical curve
+//
+func Encode (client *btcrpcclient.Client, hash []byte ) ([]byte, error) {
+    length := len(hash)
+    if(length==0 || length>30){
+		return nil, errors.New("Encode can only handle 1 to 63 bytes")
 	}
-	if(len(hash)<20){
-		var padlen int = 20-len(hash)
-		var pad []byte
-	    pad = make([]byte,padlen)
-		hash = append(hash, pad...)
+	data := btcwire.DoubleSha256(hash);
+	if(length<30){
+		hash = append(hash, data[:30-length]...)
     }
-	b := make([]byte, 0, 1+20+4)
-	b = append(b, 111)
-	b = append(b, hash...)
-	cksum := btcwire.DoubleSha256(b)[:4]
-	b = append(b, cksum...)
-	return b, nil
+    b := []byte {2, byte(length)}
+    b = append(b,hash...)
+    b = append(b,0)
+	
+	for i:= 0; i< 256; i++ {
+		b[len(b)-1] = byte(i)
+	    adr2  := hex.EncodeToString(b)	
+		_,e := btcutil.DecodeAddress(adr2, activeNet.Params);
+    	if e == nil {
+    	   return b, nil
+    	}
+    }
+
+	log.Print("Failure")
+	return b, errors.New("Couldn't fix the address")
 }
 
 //
-// Faithfully extracts the 20 bytes encoded into the given bitcoin address
+// Faithfully extracts upto 63 bytes encoded into the given bitcoin address
 func Decode (addr []byte) []byte {
-    data := addr[1:21]
+    length := int(addr[1])
+    data := addr[2:length+2]
     return data
 }
 
@@ -99,7 +112,7 @@ func two () {
 		test := []byte("13534523501")
 		
 		log.Println("Encoding : ", string(test) )	
-		v,err := Encode(test)
+		v,err := Encode(client, test)
 		if err == nil {
 	    	log.Println("test: "+ btcutil.Base58Encode(v))
 		    code := Decode(v)
